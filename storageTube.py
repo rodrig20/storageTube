@@ -7,144 +7,201 @@ from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
 
 
-def criar_caminho(caminho):
+def create_path(path: str) -> bool:
+    """
+    Create path to a certain folder
+
+    Args:
+        path (str): Path to folder
+
+    Returns:
+        bool: success
+    """
     try:
-        partes_do_caminho = caminho.split(os.path.sep)
-        caminho_atual = ''
-        for parte in partes_do_caminho:
-            caminho_atual = os.path.join(caminho_atual, parte)
-            if not os.path.exists(caminho_atual):
-                os.mkdir(caminho_atual)
+        os.makedirs(path, exist_ok=True)
         return True
     except OSError:
-            
         return False
 
 
-def is_valid_path_string(path_string, type):
-    try:
-        Path(path_string)
-        if type == ".mp4" and not path_string.endswith(".mp4"):
-            if path_string.endswith("\\") or path_string.endswith("/") or path_string == "":
-                path_string += "output_video.mp4"
-            else:
-                if not os.path.exists(path_string):
-                    os.makedirs(path_string)
-                path_string += "\\output_video.mp4"
-                
-        if type == ".mp4" and not path_string.endswith(".mp4"):
-            if path_string.endswith("\\") or path_string.endswith("/") or path_string == "":
-                path_string += "output_video.mp4"
-            else:
-                if not os.path.exists(path_string):
-                    os.makedirs(path_string)
-                path_string += "\\output_video.mp4"
-                
-        elif type == "folder":
-            if not criar_caminho(path_string):
-                print(f"A string '{path_string}' não é um {type} válido.")
-                return False
+def is_valid_file(path: str, parser: argparse.ArgumentParser) -> str:
+    """
+    Check if is a file.
 
-        return path_string
-    except Exception as e:
-        print(f"A string '{path_string}' não é um {type} válido.\nErro: {e}")
-        return False
+    Args:
+        path (str): Path to file
+        parser: ArgumentParser instance
+
+    Returns:
+        str: Validated file path
+
+    Raises:
+        ArgumentTypeError: If the file does not exist
+    """
+    is_valid_archive(path, parser)
+    if not os.path.isfile(path):
+        parser.error(f'The file {path} does not exist.')
+    return path
 
 
-def is_valid_file(arg):
-    is_valid_archive(arg)
-    if not os.path.isfile(arg):
-        print(f'O arquivo {arg} não existe!')
-    return arg
+def is_valid_archive(path: str, parser: argparse.ArgumentParser) -> str:
+    """
+    Check if the file/folder exists.
+
+    Args:
+        path (str): Path to file/folder
+        parser: ArgumentParser instance
+
+    Returns:
+        str: Validated path
+
+    Raises:
+        ArgumentTypeError: If the file/folder does not exist
+    """
+    if not os.path.exists(path):
+        parser.error(f'The file/folder {path} does not exist.')
+    return path
 
 
-def is_valid_archive(arg):
-    if not os.path.exists(arg):
-        print(f'O arquivo/pasta {arg} não existe!')
-    return arg
+def is_valid_youtube_id(youtube_url: str) -> bool:
+    """
+    Check if the YouTube video ID is valid.
 
+    Args:
+        youtube_url (str): YouTube video URL
 
-def is_valid_youtube_id(video_id):
+    Returns:
+        bool: True if the video ID is valid, False otherwise
+    """
+    # Create youtube checker url
     checker_url = "https://www.youtube.com/oembed?url="
-    video_url = checker_url + video_id
+    youtube_checker_url = checker_url + youtube_url
 
-    request = requests.get(video_url)
+    request: requests.Response = requests.get(youtube_checker_url)
     
+    # Check response
     return request.status_code == 200
 
-  
-def parse_args():
+
+def get_youtube_url(youtube_id: str) -> str:
+    """
+    Get the complete YouTube URL from a given ID.
+
+    Args:
+        youtube_id (str): YouTube video ID or URL fragment
+
+    Returns:
+        str: Complete YouTube URL
+    """
+    if youtube_id.startswith("youtu"):
+        youtube_url = "https://" + youtube_id
+    elif not youtube_id.startswith("https://youtu") and not youtube_id.startswith("http://youtu"):
+        youtube_url = "https://youtu.be/" + youtube_id
+    else:
+        youtube_url = youtube_id
+    
+    return youtube_url
+
+
+def parse_args() -> None:
+    """
+    Parse command-line arguments for the StorageTube script.
+
+    The script allows for various operations related to videos, including loading, saving,
+    compressing, and downloading from YouTube.
+
+    Command-line arguments:
+    - -z, --zip: Indicates whether the file will be compressed first.
+    - -f, --output-folder: Path to the output folder.
+    - -n, --output-name: Name of the file generated.
+    - -l, --load: Path to the video (load mode).
+    - -s, --save: Path to the file/folder to be saved (save mode).
+    - -y, --youtube-id: YouTube video ID (YouTube mode).
+    """
     parser = argparse.ArgumentParser(description="StorageTube")
 
-    # Adicionando argumentos
-    # parser.add_argument('-p', '--path', type=str, help='Caminho para o arquivo a ser processado')
+    # Add arguments
+    parser.add_argument('-z', '--zip', action='store_true', help='Indicates whether the file will be compressed first.')
+    parser.add_argument('-f', '--output-folder', type=str, dest="out_folder", default=".\\", metavar='OUTPUT FOLDER', help='Path to the output folder')
+    parser.add_argument('-n', '--output-name', type=str, dest="out_name", default=".", metavar='OUTPUT FILE NAME', help='Name of file generated')
+    # Add mode arguments
     mode_group = parser.add_mutually_exclusive_group(required=True)
-    mode_group.add_argument('-l', '--load', dest='load', type=is_valid_file, metavar='VIDEO', help='Caminho para o video a ser Carregado')
-    mode_group.add_argument('-s', '--save', dest='save', type=is_valid_archive, metavar='ARQUIVO/FOLDER', help='Caminho para o ficheiro/pasta a ser Guardado')
-    mode_group.add_argument('-y', '--youtube-id', dest='youtube_id', type=str, metavar='YOUTUBE_ID', help='Id de um video do Youtube')
+    mode_group.add_argument('-l', '--load', dest='load', type=lambda val: is_valid_file(val, parser), metavar='VIDEO', help='Path to the video')
+    mode_group.add_argument('-s', '--save', dest='save', type=lambda val: is_valid_archive(val, parser), metavar='ARQUIVO/FOLDER', help='Path to the file/folder to be Saved')
+    mode_group.add_argument('-y', '--youtube-id', dest='youtube_id', type=str, metavar='YOUTUBE_ID', help='YouTube video ID')
     
-    parser.add_argument('-z', '--zip', action='store_true', help='Indica se o ficheiro vai ser comprimido primeiro')
-    parser.add_argument('-f', '--output-folder', type=str, dest="out_folder", default=".\\", metavar='OUTPUT FOLDER', help='Caminho para a pasta de saida')
-    parser.add_argument('-n', '--output-name', type=str, dest="out_name", default=".", metavar='OUTPUT FILE NAME', help='Nome do arquivo gerado sem extensão')
-
-    # Parseando os argumentos da linha de comando
+    # Parse command line arguments
     args = parser.parse_args()
-    if args.out_name == ".":
-        args.out_name = None
+    
+    # Process output path
+    if args.out_name == "." or args.out_name == "":  # Default name
+        args.out_name = ""
         out_name = os.path.splitext(os.path.basename(Path(args.save or args.load or args.youtube_id).name))[0]
     else:
         out_name = args.out_name
-    
+        
     full_path = os.path.join(args.out_folder, out_name)
     
+    # If in save mode
     if args.save and os.path.exists(args.save):
+        # If the --zip flag is used on a folder
         if args.zip and os.path.isdir(args.save):
-            print("A flag --zip não pode ser usada em pastas")
+            parser.error("The flag --zip cannot be used on folder.")
         else:
-            if os.path.isfile(args.save) and args.zip:
+            # If it is necessary to compress the output path.
+            if (os.path.isfile(args.save) and args.zip) or (os.path.isdir(args.save)):
                 zip_path = full_path + ".zip"
-                criar_caminho(os.path.dirname(zip_path))
-                print("A comprimir o ficheiro")
-                with ZipFile(zip_path, 'w') as zip_object:
-                    zip_object.write(args.save, Path(args.save).name, ZIP_DEFLATED)
-                args.save = zip_path
-
-            elif os.path.isdir(args.save):
-                zip_path = full_path + ".zip"
-                criar_caminho(os.path.dirname(zip_path))
-                print("A comprimir a pasta")
-                with ZipFile(zip_path, 'w') as zip_object:
-                    zip_object.write(args.save, Path(args.save).name, ZIP_DEFLATED)
-                args.save = zip_path
-            criar_caminho(os.path.dirname(full_path))
+                # Create the output folder
+                if create_path(os.path.dirname(zip_path)):
+                    print("Compressing...")
+                    # Create zip file
+                    with ZipFile(zip_path, 'w') as zip_object:
+                        zip_object.write(args.save, Path(args.save).name, ZIP_DEFLATED)
+                    args.save = zip_path
+                else:
+                    parser.error("A problem occurred while creating the output folder.")
+            else:
+                # Create the path
+                if not create_path(os.path.dirname(full_path)):
+                    parser.error("A problem occurred while creating the output folder.")
+            
+            # Save file on video
             functions.save(args.save, full_path + ".mp4")
-                
+    
+    # If in load mode
     elif args.load and os.path.exists(args.load):
+        # If the --zip flag is used load mode
         if args.zip:
-            print("A flag --zip não pode ser usada em load")
+            parser.error("The flag --zip cannot be used on load mode.")
+        # If the file is not an mp4 file
         elif not args.load.endswith(".mp4"):
-            print(f"Parece que o caminho {args.load} não é um ficheiro .mp4")
+            parser.error(f"It seems that the path {args.load} is not an mp4 file.")
         else:
-            criar_caminho(args.out_folder)
+            # Create the path
+            if not create_path(args.out_folder):
+                parser.error("A problem occurred while creating the output folder.")
+                
+            # Load mp4
             functions.load(args.load, args.out_folder, output_file_name=args.out_name)
         
+    # If in youtube mode
     elif args.youtube_id:
-        if args.youtube_id.startswith("youtu"):
-            video_url = "https://" + args.youtube_id
-        elif not args.youtube_id.startswith("https://youtu") and not args.youtube_id.startswith("http://youtu"):
-            video_url = "https://youtu.be/" + args.youtube_id
-        else:
-            video_url = args.youtube_id
-        if is_valid_youtube_id(video_url):
-            video_path = youtube_functions.download(video_url, args.out_folder, args.out_name + ("" if args.out_name is None else ".mp4"))
+        # Process the id to get youtube url
+        youtube_url = get_youtube_url(args.youtube_id)
+        
+        # Check if youtube_url is válid and exists
+        if is_valid_youtube_id(youtube_url):
+            # Download youtube video
+            video_path = youtube_functions.download(youtube_url, args.out_folder, args.out_name + ("" if args.out_name == "" else ".mp4"))
             if video_path:
+                # Load downloaded mp4
                 functions.load(video_path, args.out_folder, output_file_name=args.out_name)
                 
             else:
-                print(f'Não foi possivel encontar um video em {video_url}!')
+                parser.error(f'Could not find a video at {youtube_url}.')
                 
         else:
-            print(f'Não foi possivel encontrar um video com id {video_url[17:]}!')
+            parser.error(f'The video with id {youtube_url[17:]} is invalid.')
 
   
 if __name__ == "__main__":
