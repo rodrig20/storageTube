@@ -68,39 +68,39 @@ def create_info_from_file(file_path):
     return full_info
 
 
-def save(file_path):
+def save(input_file, output_video):
     save_aum = aum
     
     width = 1280 // save_aum
     height = 720 // save_aum
 
-    video_filename = 'out.mp4'
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            
+    video_writer = cv2.VideoWriter(output_video, fourcc, 20, (width * save_aum, height * save_aum))
+        
+    info = create_info_from_file(input_file)
     
-    video_writer = cv2.VideoWriter(video_filename, fourcc, 20, (width * save_aum, height * save_aum))
-    
-    info = create_info_from_file(file_path)
-    
-    iteracoes = (os.path.getsize(file_path))
-    barra_progresso = tqdm(total=iteracoes, desc="Save")
+    iteracoes = 1 + (os.path.getsize(input_file) // ((width * height) // 8) + (1 if os.path.getsize(input_file) % ((width * height) // 8) else 0))
+    barra_progresso = tqdm(total=iteracoes, desc="Save", unit="Frames", unit_scale=True, dynamic_ncols=True, bar_format="[{elapsed}│{desc}: {percentage:3.0f}%▕{bar}▎{n}/{total}│{unit}│{remaining}]")
     
     array = bits_to_array(info, height, width)
     array = cv2.resize(array, (width * save_aum, height * save_aum), interpolation=cv2.INTER_NEAREST)
     video_writer.write(array)
-
-    file = open(file_path, "rb")
-    while (bytes_str := file.read(((width) * (height)) // 8)):
+    barra_progresso.update(1)
+    file = open(input_file, "rb")
+    while (bytes_str := file.read((width * height) // 8)):
         array = bits_to_array(bytes_str, height, width)
         array = cv2.resize(array, (width * save_aum, height * save_aum), interpolation=cv2.INTER_NEAREST)
         video_writer.write(array)
-        barra_progresso.update(len(bytes_str))
+        barra_progresso.update(1)
+    barra_progresso.close()
     file.close()
     video_writer.release()
 
 
-def load(video_path):
+def load(input_video, output_folder, output_file_name=None):
     try:
-        clip = mp.VideoFileClip(video_path)
+        clip = mp.VideoFileClip(input_video)
     
     # Verifique se a abertura do vídeo foi bem-sucedida
     except OSError:
@@ -111,21 +111,29 @@ def load(video_path):
     
     first_frame = True
     num_bytes = 0
+    barra_progresso = tqdm(total=int(clip.fps * clip.duration), desc="Load", unit="Frames", unit_scale=True, dynamic_ncols=True, bar_format="[{elapsed}│{desc}: {percentage:3.0f}%▕{bar}▎{n}/{total}│{unit}│{remaining}]")
     
     for frame in clip.iter_frames(fps=clip.fps, dtype="uint8"):
         if first_frame:
             first_frame = False
             frame_bytes = array_to_bits(frame)
             file_name, num_total_bytes = read_info_from_file(frame_bytes)
-            barra_progresso = tqdm(total=num_total_bytes, desc="Load")
-            with open(file_name, "wb+"):
+            
+            if output_file_name is not None:
+                full_path = os.path.join(output_folder, output_file_name)
+                full_path += os.path.splitext(file_name)[1]
+            else:
+                full_path = os.path.join(output_folder, file_name)
+            with open(full_path, "wb+"):
                 pass
-            continue
+
+        else:
+            bytes_str = array_to_bits(frame, (None if (num_total_bytes - num_bytes) > ((frame.shape[0] * frame.shape[1]) // 8) else num_total_bytes - num_bytes))
+            
+            with open(full_path, "ab") as file:
+                file.write(bytes_str)
+            loaded_bytes = min(num_total_bytes - num_bytes, (frame.shape[0] * frame.shape[1]) // 8)
+            num_bytes += loaded_bytes
+        barra_progresso.update(1)
         
-        bytes_str = array_to_bits(frame, (None if (num_total_bytes - num_bytes) > ((frame.shape[0] * frame.shape[1]) // 8) else num_total_bytes - num_bytes))
-        
-        with open(file_name, "ab") as file:
-            file.write(bytes_str)
-        loaded_bytes = min(num_total_bytes - num_bytes, (frame.shape[0] * frame.shape[1]) // 8)
-        barra_progresso.update(loaded_bytes)
-        num_bytes += loaded_bytes
+    barra_progresso.close()
