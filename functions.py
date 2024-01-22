@@ -2,7 +2,10 @@ from tqdm import tqdm
 import numpy as np
 import cv2
 import os
-import moviepy.editor as mp
+from multiprocessing import Process, Queue
+from threading import Thread
+import tempfile
+
 
 aum = 4
 
@@ -17,15 +20,15 @@ def binarize_img(image_src: np.ndarray) -> np.ndarray:
     Returns:
         numpy.ndarray: Binary image represented as an array of binary pixels.
     """
-    # Threshold the image to create a binary representation
-    _, array_rgb = cv2.threshold(src=image_src, thresh=256 // 2, maxval=255, type=cv2.THRESH_BINARY)
-    
-    # Define a white pixel value for comparison
-    white_value = np.array([255, 255, 255], dtype=np.uint8)
+    # Convert the image to grayscale
+    gray_image = cv2.cvtColor(image_src, cv2.COLOR_RGB2GRAY)
 
-    # Create an array of binary pixels (1 for white, 0 for non-white)
-    binary_pixels = np.all(array_rgb == white_value, axis=-1).astype(int)
-    
+    # Binarize the grayscale image
+    _, binary_pixels = cv2.threshold(gray_image, 128, 255, cv2.THRESH_BINARY)
+
+    # Convert binary image to array of binary pixels (0 or 1) with rounding
+    binary_pixels = np.round(binary_pixels / 255).astype(int)
+
     return binary_pixels
 
 
@@ -179,6 +182,82 @@ def save(input_file: str, output_video: str) -> None:
     video_writer.release()
 
 
+def load_frames(input_video: str, dir_name: str, file_name: str, num_of_divisions: int, num_part: int, last_frame_size: int, aum: int, queue: Queue):
+    """
+    Process frames from a video and save partial results to binary files.
+
+    Args:
+        input_video (str): Path to the input video file.
+        dir_name (str): Directory where the output binary files will be stored.
+        file_name (str): Name of the output binary file.
+        num_of_divisions (int): Number of divisions to split the video into.
+        num_part (int): Current part number (starting from 0).
+        last_frame_size (int): Size of the last frame in the video.
+        aum (int): Factor to resize frames.
+        queue (Queue): Queue for progress updates.
+    """
+    # Create output path
+    if (num_part):
+        path = os.path.join(dir_name, f"{num_part}.bin")
+    else:
+        path = os.path.join(dir_name, file_name)
+    
+    # Open video file
+    cap = cv2.VideoCapture(input_video)
+    length = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    # Get the starter point
+    division_poin = ((length//num_of_divisions) * num_part) + 1
+
+    # Set the reader to the given frame number (division_poin)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, division_poin)
+    final_part = num_of_divisions - 1 ==  num_part
+    
+    # Counting the number of frames that need to be read
+    if final_part:
+        count = length - division_poin
+    else:
+        count = length // num_of_divisions
+    
+    while count!=0:
+        # Read the frame
+        ret, frame = cap.read()
+        
+        if not ret:
+            break
+        
+        count -= 1
+        # Resize and process the frame 
+        frame = cv2.resize(frame, (1280 // aum, 720 // aum))
+        bytes_str = array_to_bytes(frame, (last_frame_size if final_part and count==0 else -1))
+        
+        # Write info
+        with open(path, "ab") as file:
+            file.write(bytes_str)
+        
+        # Update queue
+        queue.put(1)
+    cap.release()
+
+   
+def progress_thread(queue: Queue, size: int) -> None:
+    """
+    Monitors a progress queue and updates a tqdm progress bar accordingly.
+
+    Args:
+        queue (Queue): The queue for monitoring progress updates.
+        size (int): The total size of the progress (number of updates).
+    """
+    i=size-1
+    pbar = tqdm(total=i, desc="Load", unit="Frames", unit_scale=True, dynamic_ncols=True, bar_format="[{elapsed}│{desc}: {percentage:3.0f}%▕{bar}▎{n}/{total}│{unit}│{remaining}]")
+    # Wait to update the bar
+    while i:
+        queue.get()
+        pbar.update(1)
+        i-=1
+    pbar.close()
+
+
 def load(input_video: str, output_folder: str, output_file_name: str="") -> None:
     """
     Load frames from a video and save them to a file.
@@ -187,54 +266,67 @@ def load(input_video: str, output_folder: str, output_file_name: str="") -> None
         input_video (str): Path to the input video file.
         output_folder (str): Path to the output folder.
     """
-    try:
-        # Load the video clip
-        clip = mp.VideoFileClip(input_video)
+    # Open video file and get first frame
+    cap = cv2.VideoCapture(input_video)
+    ret, frame = cap.read()
+    size = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+    if ret and size > 1:
+        frame = cv2.resize(frame, (1280 // aum, 720 // aum), interpolation=cv2.INTER_NEAREST)
+        
+        # Get file info from first frame
+        frame_bytes = array_to_bytes(frame)
+        file_name, num_total_bytes = read_info_from_file(frame_bytes)
+        
+        # Get the size of the information in the last frame.
+        last_frame_size = num_total_bytes - (((size-2) * ((1280 // aum) * (720 // aum))) // 8)
 
-    # Check if video opening was successful
-    except OSError:
-        print("Error opening the video.")
-        return
-
-    # Resize the video clip
-    clip = clip.resize(height=720 // aum)
-
-    first_frame = True
-    num_bytes = 0
-
-    # Initialize tqdm progress bar
-    pbar = tqdm(total=int(clip.fps * clip.duration), desc="Load", unit="Frames", unit_scale=True, dynamic_ncols=True, bar_format="[{elapsed}│{desc}: {percentage:3.0f}%▕{bar}▎{n}/{total}│{unit}│{remaining}]")
-
-    for frame in clip.iter_frames(fps=clip.fps, dtype="uint8"):
-        if first_frame:
-            first_frame = False
-            frame_bytes = array_to_bytes(frame)
-            file_name, num_total_bytes = read_info_from_file(frame_bytes)
-
-            # Create the output file path
-            if output_file_name != "":
-                full_path = os.path.join(output_folder, output_file_name)
-                full_path += os.path.splitext(file_name)[1]
-            else:
-                full_path = os.path.join(output_folder, file_name)
-
-            # Create an empty file
-            with open(full_path, "wb+"):
-                pass
-
+        # Create the output file path
+        if output_file_name != "":
+            full_path = os.path.join(output_folder, output_file_name)
+            full_path += os.path.splitext(file_name)[1]
         else:
-            # Convert frame to bytes and write to the output file
-            bytes_str = array_to_bytes(frame, (None if (num_total_bytes - num_bytes) > ((frame.shape[0] * frame.shape[1]) // 8) else num_total_bytes - num_bytes))
+            full_path = os.path.join(output_folder, file_name)
+        
+        # Create temp dir and clear the output_path
+        temp_dir = tempfile.mkdtemp()
+        open(full_path, "wb").close()
+        
+        th_num = 2
+        if size < th_num:
+            th_num = 1
+                
+        # Create an empty list of processes and a queue
+        prs = []
+        queue = Queue()
+        
+        # Start progress bar Thread
+        th_bar = Thread(target=progress_thread, args=(queue, size), daemon=True)
+        th_bar.start()
+        
+        for i in range(th_num):
+            # Defines where the file information fragments will be stored
+            if (i == 0):
+                dir_name = output_folder
+                file_name = os.path.basename(full_path)
+            else:
+                dir_name = temp_dir
+                file_name = ""
 
-            with open(full_path, "ab") as file:
-                file.write(bytes_str)
-
-            # Update the number of loaded bytes
-            loaded_bytes = min(num_total_bytes - num_bytes, (frame.shape[0] * frame.shape[1]) // 8)
-            num_bytes += loaded_bytes
-
-        # Update the progress bar
-        pbar.update(1)
-
-    # Close the progress bar
-    pbar.close()
+            # Start process to processing a frame
+            prs.append(Process(target=load_frames, args=(input_video, dir_name, file_name, th_num, i, last_frame_size, aum, queue)))
+            prs[-1].start()
+        
+        # Wait for all processes
+        for i in range(th_num):
+            prs.pop(0).join()
+            if i:
+                # Copy info to th real file
+                with open(full_path, "ab") as w_f:
+                    with open(os.path.join(temp_dir, f"{i}.bin"), "rb") as r_f:
+                        w_f.write(r_f.read())       
+        
+        # Close progress bar Thread
+        th_bar.join()
+    else:
+        print("Error opening the video.")
