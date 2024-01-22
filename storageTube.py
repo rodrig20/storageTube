@@ -155,8 +155,15 @@ def parse_args() -> None:
                 if create_path(os.path.dirname(zip_path)):
                     print("Compressing...")
                     # Create zip file
-                    with ZipFile(zip_path, 'w') as zip_object:
-                        zip_object.write(args.save, Path(args.save).name, ZIP_DEFLATED)
+                    with ZipFile(zip_path, 'w') as zipf:
+                        if os.path.isdir(args.save):
+                            for current_folder, _, files in os.walk(args.save):
+                                for file in files:
+                                    full_path = os.path.join(current_folder, file)
+                                    arcname = os.path.relpath(full_path, args.save)
+                                    zipf.write(full_path, arcname=arcname, compress_type=ZIP_DEFLATED)
+                        else:
+                            zipf.write(args.save, arcname=Path(args.save).name, compress_type=ZIP_DEFLATED)
                     args.save = zip_path
                 else:
                     parser.error("A problem occurred while creating the output folder.")
