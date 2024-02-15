@@ -27,7 +27,7 @@ def binarize_img(image_src: np.ndarray) -> np.ndarray:
     _, binary_pixels = cv2.threshold(gray_image, 128, 255, cv2.THRESH_BINARY)
 
     # Convert binary image to array of binary pixels (0 or 1) with rounding
-    binary_pixels = np.round(binary_pixels / 255).astype(int)
+    binary_pixels = np.around(binary_pixels.astype(np.uint8)).astype(int)
 
     return binary_pixels
 
@@ -141,7 +141,6 @@ def save(input_file: str, output_video: str) -> None:
     Args:
         input_file (str): Path to the input file.
         output_video (str): Path to the output video file.
-        aum (int): Upsampling factor (default is 1).
     """
     save_aum = aum
 
